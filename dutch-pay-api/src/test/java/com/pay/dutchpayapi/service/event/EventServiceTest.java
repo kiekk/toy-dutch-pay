@@ -1,12 +1,10 @@
 package com.pay.dutchpayapi.service.event;
 
 import com.pay.dutchpayapi.domain.event.Event;
+import com.pay.dutchpayapi.dto.event.EventCreateRequest;
 import com.pay.dutchpayapi.dto.event.EventSearchRequest;
 import com.pay.dutchpayapi.repository.event.EventRepository;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.DynamicTest;
-import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -102,6 +100,26 @@ class EventServiceTest {
                     assertThat(events).isEmpty();
                 })
         );
+    }
+
+    @DisplayName("일정을 등록한다.")
+    @Test
+    void createEvent() {
+        // given
+        String title = "일정1";
+        LocalDate now = LocalDate.now();
+        EventCreateRequest request = EventCreateRequest.builder()
+                .title(title)
+                .date(now)
+                .build();
+
+        // when
+        Event event = eventService.create(request);
+
+        // then
+        assertThat(event)
+                .extracting("title", "date")
+                .contains(title, now);
     }
 
     private Event createEvent(String title, LocalDate date) {
