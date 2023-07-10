@@ -1,6 +1,7 @@
 package com.pay.dutchpayapi.service.event;
 
 import com.pay.dutchpayapi.domain.event.Event;
+import com.pay.dutchpayapi.dto.event.EventCreateRequest;
 import com.pay.dutchpayapi.dto.event.EventSearchRequest;
 import com.pay.dutchpayapi.repository.event.EventRepository;
 import com.pay.dutchpayapi.spec.SpecBuilder;
@@ -27,6 +28,10 @@ public class EventService {
                 .ifHasText(search.getEndDate(), EventSpec::afterEventDate)
                 .toSpec();
         return eventRepository.findAll(spec);
+    }
+
+    public Event create(EventCreateRequest request) {
+        return eventRepository.save(request.toEntity());
     }
 
 }
