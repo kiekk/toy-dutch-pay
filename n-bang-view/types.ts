@@ -1,9 +1,5 @@
 /**
- * Frontend 도메인 타입 정의
- *
- * 이 파일의 타입들은 프론트엔드에서 사용하는 도메인 모델입니다.
- * API 응답 타입(services/api/types.ts)과는 다를 수 있으며,
- * mappers.ts에서 변환됩니다.
+ * 도메인 타입 정의
  */
 
 // ============================================
@@ -38,8 +34,6 @@ export interface SettlementRound {
   amount: number;
   payerId: string;
   excluded: Exclusion[];
-  /** 영수증 이미지 URL */
-  receiptImage?: string;
 }
 
 // ============================================
