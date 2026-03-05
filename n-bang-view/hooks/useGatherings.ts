@@ -1,163 +1,106 @@
 import { useState, useCallback, useEffect } from 'react';
-import { gatheringApi, participantApi, roundApi } from '../services/api';
+import { storageService } from '../services/storage/storageService';
 import type { Gathering, Participant, SettlementRound, Exclusion, GatheringType } from '../types';
-import {
-  mapGatheringFromApi,
-  mapGatheringToCreateRequest,
-  mapRoundToCreateRequest,
-  mapRoundToUpdateRequest,
-} from '../utils/mappers';
 
 interface UseGatheringsReturn {
   gatherings: Gathering[];
   isLoading: boolean;
   error: string | null;
-  // Gathering operations
-  fetchGatherings: () => Promise<void>;
-  createGathering: (name: string, type: GatheringType, startDate: string, endDate: string) => Promise<Gathering | null>;
-  updateGathering: (id: string, name: string, type: GatheringType, startDate: string, endDate: string) => Promise<Gathering | null>;
-  deleteGathering: (id: string) => Promise<boolean>;
-  // Participant operations
-  addParticipant: (gatheringId: string, name: string) => Promise<Participant | null>;
-  removeParticipant: (gatheringId: string, participantId: string) => Promise<boolean>;
-  // Round operations
-  addRound: (gatheringId: string, title: string, amount: number, payerId: string, exclusions?: Exclusion[]) => Promise<SettlementRound | null>;
-  updateRound: (gatheringId: string, roundId: string, title: string, amount: number, payerId: string, exclusions?: Exclusion[]) => Promise<SettlementRound | null>;
-  deleteRound: (gatheringId: string, roundId: string) => Promise<boolean>;
-  // Local state update (for optimistic updates)
+  fetchGatherings: () => void;
+  createGathering: (name: string, type: GatheringType, startDate: string, endDate: string) => Gathering | null;
+  updateGathering: (id: string, name: string, type: GatheringType, startDate: string, endDate: string) => Gathering | null;
+  deleteGathering: (id: string) => boolean;
+  addParticipant: (gatheringId: string, name: string) => Participant | null;
+  removeParticipant: (gatheringId: string, participantId: string) => boolean;
+  addRound: (gatheringId: string, title: string, amount: number, payerId: string, exclusions?: Exclusion[]) => SettlementRound | null;
+  updateRound: (gatheringId: string, roundId: string, title: string, amount: number, payerId: string, exclusions?: Exclusion[]) => SettlementRound | null;
+  deleteRound: (gatheringId: string, roundId: string) => boolean;
   updateLocalGathering: (id: string, updates: Partial<Gathering>) => void;
-  refreshGathering: (id: string) => Promise<Gathering | null>;
 }
 
-export const useGatherings = (isAuthenticated: boolean): UseGatheringsReturn => {
+export const useGatherings = (): UseGatheringsReturn => {
   const [gatherings, setGatherings] = useState<Gathering[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch all gatherings
-  const fetchGatherings = useCallback(async () => {
-    if (!isAuthenticated) return;
-
-    setIsLoading(true);
-    setError(null);
-    try {
-      const response = await gatheringApi.findAll();
-      const mapped = response.map(mapGatheringFromApi);
-      setGatherings(mapped);
-    } catch (err) {
-      setError('모임 목록을 불러오는데 실패했습니다.');
-      console.error('Failed to fetch gatherings:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [isAuthenticated]);
-
-  // Fetch single gathering
-  const refreshGathering = useCallback(async (id: string): Promise<Gathering | null> => {
-    try {
-      const response = await gatheringApi.findById(Number(id));
-      const mapped = mapGatheringFromApi(response);
-      setGatherings(prev => prev.map(g => g.id === id ? mapped : g));
-      return mapped;
-    } catch (err) {
-      console.error('Failed to refresh gathering:', err);
-      return null;
-    }
+  const fetchGatherings = useCallback(() => {
+    setGatherings(storageService.getGatherings());
+    setIsLoading(false);
   }, []);
 
-  // Create gathering
-  const createGathering = useCallback(async (
+  useEffect(() => {
+    fetchGatherings();
+  }, [fetchGatherings]);
+
+  const createGathering = useCallback((
     name: string,
     type: GatheringType,
     startDate: string,
     endDate: string
-  ): Promise<Gathering | null> => {
+  ): Gathering | null => {
     try {
-      const request = mapGatheringToCreateRequest(name, type, startDate, endDate);
-      const response = await gatheringApi.create(request);
-      const mapped = mapGatheringFromApi(response);
-      setGatherings(prev => [mapped, ...prev]);
-      return mapped;
-    } catch (err) {
+      const gathering: Gathering = {
+        id: crypto.randomUUID(),
+        name,
+        type,
+        startDate: new Date(startDate).getTime(),
+        endDate: new Date(endDate).getTime(),
+        createdAt: Date.now(),
+        participants: [],
+        rounds: [],
+      };
+      storageService.saveGathering(gathering);
+      setGatherings(prev => [gathering, ...prev]);
+      return gathering;
+    } catch {
       setError('모임 생성에 실패했습니다.');
-      console.error('Failed to create gathering:', err);
       return null;
     }
   }, []);
 
-  // Update gathering
-  const updateGathering = useCallback(async (
+  const updateGathering = useCallback((
     id: string,
     name: string,
     type: GatheringType,
     startDate: string,
     endDate: string
-  ): Promise<Gathering | null> => {
-    try {
-      const request = { name, type, startDate, endDate };
-      const response = await gatheringApi.update(Number(id), request);
-      const mapped = mapGatheringFromApi(response);
-      setGatherings(prev => prev.map(g => g.id === id ? { ...mapped, color: g.color } : g));
-      return mapped;
-    } catch (err) {
-      setError('모임 수정에 실패했습니다.');
-      console.error('Failed to update gathering:', err);
-      return null;
+  ): Gathering | null => {
+    const updates = {
+      name,
+      type,
+      startDate: new Date(startDate).getTime(),
+      endDate: new Date(endDate).getTime(),
+    };
+    const updated = storageService.updateGathering(id, updates);
+    if (updated) {
+      setGatherings(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g));
     }
+    return updated;
   }, []);
 
-  // Delete gathering
-  const deleteGathering = useCallback(async (id: string): Promise<boolean> => {
-    try {
-      await gatheringApi.delete(Number(id));
-      setGatherings(prev => prev.filter(g => g.id !== id));
-      return true;
-    } catch (err) {
-      setError('모임 삭제에 실패했습니다.');
-      console.error('Failed to delete gathering:', err);
-      return false;
-    }
+  const deleteGathering = useCallback((id: string): boolean => {
+    const ok = storageService.deleteGathering(id);
+    if (ok) setGatherings(prev => prev.filter(g => g.id !== id));
+    return ok;
   }, []);
 
-  // Add participant
-  const addParticipant = useCallback(async (
-    gatheringId: string,
-    name: string
-  ): Promise<Participant | null> => {
-    try {
-      const response = await participantApi.addToGathering(Number(gatheringId), { name });
-      const newParticipant: Participant = {
-        id: String(response.id),
-        name: response.name,
-      };
-
-      // Update local state
-      setGatherings(prev => prev.map(g => {
+  const addParticipant = useCallback((gatheringId: string, name: string): Participant | null => {
+    const newParticipant: Participant = { id: crypto.randomUUID(), name };
+    setGatherings(prev => {
+      const updated = prev.map(g => {
         if (g.id !== gatheringId) return g;
-        return {
-          ...g,
-          participants: [...g.participants, newParticipant],
-        };
-      }));
-
-      return newParticipant;
-    } catch (err) {
-      setError('참여자 추가에 실패했습니다.');
-      console.error('Failed to add participant:', err);
-      return null;
-    }
+        return { ...g, participants: [...g.participants, newParticipant] };
+      });
+      const target = updated.find(g => g.id === gatheringId);
+      if (target) storageService.updateGathering(gatheringId, { participants: target.participants });
+      return updated;
+    });
+    return newParticipant;
   }, []);
 
-  // Remove participant
-  const removeParticipant = useCallback(async (
-    gatheringId: string,
-    participantId: string
-  ): Promise<boolean> => {
-    try {
-      await participantApi.delete(Number(participantId));
-
-      // Update local state
-      setGatherings(prev => prev.map(g => {
+  const removeParticipant = useCallback((gatheringId: string, participantId: string): boolean => {
+    setGatherings(prev => {
+      const updated = prev.map(g => {
         if (g.id !== gatheringId) return g;
         const updatedParticipants = g.participants.filter(p => p.id !== participantId);
         const updatedRounds = g.rounds.map(r => ({
@@ -166,131 +109,84 @@ export const useGatherings = (isAuthenticated: boolean): UseGatheringsReturn => 
           excluded: r.excluded.filter(e => e.participantId !== participantId),
         }));
         return { ...g, participants: updatedParticipants, rounds: updatedRounds };
-      }));
-
-      return true;
-    } catch (err) {
-      setError('참여자 삭제에 실패했습니다.');
-      console.error('Failed to remove participant:', err);
-      return false;
-    }
+      });
+      const target = updated.find(g => g.id === gatheringId);
+      if (target) storageService.updateGathering(gatheringId, { participants: target.participants, rounds: target.rounds });
+      return updated;
+    });
+    return true;
   }, []);
 
-  // Add round
-  const addRound = useCallback(async (
+  const addRound = useCallback((
     gatheringId: string,
     title: string,
     amount: number,
     payerId: string,
     exclusions?: Exclusion[]
-  ): Promise<SettlementRound | null> => {
-    try {
-      const request = mapRoundToCreateRequest(title, amount, Number(payerId), exclusions);
-      const response = await roundApi.create(Number(gatheringId), request);
-
-      const newRound: SettlementRound = {
-        id: String(response.id),
-        title: response.title,
-        amount: response.amount,
-        payerId: String(response.payerId),
-        excluded: response.exclusions.map(e => ({
-          participantId: String(e.participantId),
-          reason: e.reason,
-        })),
-        receiptImage: response.receiptImageUrl || undefined,
-      };
-
-      // Update local state
-      setGatherings(prev => prev.map(g => {
+  ): SettlementRound | null => {
+    const newRound: SettlementRound = {
+      id: crypto.randomUUID(),
+      title,
+      amount,
+      payerId,
+      excluded: exclusions || [],
+    };
+    setGatherings(prev => {
+      const updated = prev.map(g => {
         if (g.id !== gatheringId) return g;
         return { ...g, rounds: [...g.rounds, newRound] };
-      }));
-
-      return newRound;
-    } catch (err) {
-      setError('지출 내역 추가에 실패했습니다.');
-      console.error('Failed to add round:', err);
-      return null;
-    }
+      });
+      const target = updated.find(g => g.id === gatheringId);
+      if (target) storageService.updateGathering(gatheringId, { rounds: target.rounds });
+      return updated;
+    });
+    return newRound;
   }, []);
 
-  // Update round
-  const updateRound = useCallback(async (
+  const updateRound = useCallback((
     gatheringId: string,
     roundId: string,
     title: string,
     amount: number,
     payerId: string,
     exclusions?: Exclusion[]
-  ): Promise<SettlementRound | null> => {
-    try {
-      const request = mapRoundToUpdateRequest(title, amount, Number(payerId), exclusions);
-      const response = await roundApi.update(Number(roundId), request);
-
-      const updatedRound: SettlementRound = {
-        id: String(response.id),
-        title: response.title,
-        amount: response.amount,
-        payerId: String(response.payerId),
-        excluded: response.exclusions.map(e => ({
-          participantId: String(e.participantId),
-          reason: e.reason,
-        })),
-        receiptImage: response.receiptImageUrl || undefined,
-      };
-
-      // Update local state
-      setGatherings(prev => prev.map(g => {
+  ): SettlementRound | null => {
+    const updatedRound: SettlementRound = {
+      id: roundId,
+      title,
+      amount,
+      payerId,
+      excluded: exclusions || [],
+    };
+    setGatherings(prev => {
+      const updated = prev.map(g => {
         if (g.id !== gatheringId) return g;
-        return {
-          ...g,
-          rounds: g.rounds.map(r => r.id === roundId ? updatedRound : r),
-        };
-      }));
-
-      return updatedRound;
-    } catch (err) {
-      setError('지출 내역 수정에 실패했습니다.');
-      console.error('Failed to update round:', err);
-      return null;
-    }
+        return { ...g, rounds: g.rounds.map(r => r.id === roundId ? updatedRound : r) };
+      });
+      const target = updated.find(g => g.id === gatheringId);
+      if (target) storageService.updateGathering(gatheringId, { rounds: target.rounds });
+      return updated;
+    });
+    return updatedRound;
   }, []);
 
-  // Delete round
-  const deleteRound = useCallback(async (
-    gatheringId: string,
-    roundId: string
-  ): Promise<boolean> => {
-    try {
-      await roundApi.delete(Number(roundId));
-
-      // Update local state
-      setGatherings(prev => prev.map(g => {
+  const deleteRound = useCallback((gatheringId: string, roundId: string): boolean => {
+    setGatherings(prev => {
+      const updated = prev.map(g => {
         if (g.id !== gatheringId) return g;
         return { ...g, rounds: g.rounds.filter(r => r.id !== roundId) };
-      }));
-
-      return true;
-    } catch (err) {
-      setError('지출 내역 삭제에 실패했습니다.');
-      console.error('Failed to delete round:', err);
-      return false;
-    }
+      });
+      const target = updated.find(g => g.id === gatheringId);
+      if (target) storageService.updateGathering(gatheringId, { rounds: target.rounds });
+      return updated;
+    });
+    return true;
   }, []);
 
-  // Update local gathering (for optimistic updates)
   const updateLocalGathering = useCallback((id: string, updates: Partial<Gathering>) => {
     setGatherings(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g));
+    storageService.updateGathering(id, updates);
   }, []);
-
-  // Fetch gatherings on mount when authenticated
-  useEffect(() => {
-    if (isAuthenticated) {
-      fetchGatherings();
-    } else {
-      setGatherings([]);
-    }
-  }, [isAuthenticated, fetchGatherings]);
 
   return {
     gatherings,
@@ -306,7 +202,6 @@ export const useGatherings = (isAuthenticated: boolean): UseGatheringsReturn => 
     updateRound,
     deleteRound,
     updateLocalGathering,
-    refreshGathering,
   };
 };
 
