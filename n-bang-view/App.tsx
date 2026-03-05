@@ -21,19 +21,14 @@ import {
   CreditCard,
   Edit2,
   Zap,
-  ShieldCheck,
-  LogOut,
   AlertCircle,
   Loader2,
-  Link2
 } from 'lucide-react';
 import { Participant, SettlementRound, DebtLink, Gathering, Exclusion, GatheringType, GATHERING_TYPES } from './types.ts';
 import { calculateBalances, resolveDebts } from './utils/calculator.ts';
 import { generateKakaoMessage } from './services/messageService.ts';
-import { useAuth } from './contexts/AuthContext.tsx';
 import { useToast } from './contexts/ToastContext.tsx';
 import { useGatherings } from './hooks';
-import { shareApi } from './services/api';
 
 // Vibrant, accessible color palette for gathering timeline bars
 const GATHERING_COLORS = [
@@ -49,13 +44,10 @@ const GATHERING_COLORS = [
 ];
 
 const App: React.FC = () => {
-  // Auth State (from AuthContext)
-  const { user, isLoading: isAuthLoading, isAuthenticated, login, logout } = useAuth();
-
   // Toast notifications
   const { showToast } = useToast();
 
-  // Data State (from API)
+  // Data State (from localStorage)
   const {
     gatherings,
     isLoading: isDataLoading,
@@ -69,8 +61,7 @@ const App: React.FC = () => {
     updateRound: apiUpdateRound,
     deleteRound: apiDeleteRound,
     updateLocalGathering,
-    refreshGathering,
-  } = useGatherings(isAuthenticated);
+  } = useGatherings();
 
   // Local State (directory for bank info - stays local)
   const [directory, setDirectory] = useState<Record<string, { bankName?: string, accountNumber?: string }>>(() => {
@@ -115,8 +106,6 @@ const App: React.FC = () => {
   const [isEditingType, setIsEditingType] = useState(false);
 
   // 공유 링크
-  const [shareLink, setShareLink] = useState<{ url: string; expiresAt: string } | null>(null);
-  const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
 
   // Persistence (only directory - gatherings are now on server)
   useEffect(() => {
@@ -166,16 +155,8 @@ const App: React.FC = () => {
     });
   }, [gatherings, directory, updateLocalGathering]);
 
-  // Auth Handlers
-  const handleLogout = () => {
-    if (confirm('로그아웃 하시겠습니까?')) {
-      logout();
-      setActiveGatheringId(null);
-    }
-  };
-
   // Gathering Logic
-  const createGathering = async () => {
+  const createGathering = () => {
     // Reset errors
     setNameError('');
     setDateError('');
@@ -200,7 +181,7 @@ const App: React.FC = () => {
       return;
     }
 
-    const newG = await apiCreateGathering(newGatheringName.trim(), newGatheringType, startDateStr, endDateStr);
+    const newG = apiCreateGathering(newGatheringName.trim(), newGatheringType, startDateStr, endDateStr);
     if (newG) {
       setActiveGatheringId(newG.id);
       setNewGatheringName('');
@@ -213,10 +194,10 @@ const App: React.FC = () => {
     }
   };
 
-  const deleteGathering = async (id: string, e?: React.MouseEvent) => {
+  const deleteGathering = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (confirm('이 모임의 모든 정산 기록이 영구적으로 삭제됩니다. 계속하시겠습니까?')) {
-      const success = await apiDeleteGathering(id);
+      const success = apiDeleteGathering(id);
       if (success) {
         if (activeGatheringId === id) {
           setActiveGatheringId(null);
@@ -256,23 +237,21 @@ const App: React.FC = () => {
   }, [selectedDate, gatherings]);
 
   // Participant Handlers
-  const addParticipant = async (nameArg?: string) => {
+  const addParticipant = (nameArg?: string) => {
     const name = (nameArg || newParticipantName).trim();
     if (!name || !activeGatheringId) return;
 
-    const newParticipant = await apiAddParticipant(activeGatheringId, name);
+    const newParticipant = apiAddParticipant(activeGatheringId, name);
     if (newParticipant) {
-      // Refresh gathering from server to ensure latest state with all participants
-      await refreshGathering(activeGatheringId);
       setNewParticipantName('');
       showToast('success', `${name}님이 추가되었습니다.`);
     }
   };
 
-  const removeParticipant = async (id: string) => {
+  const removeParticipant = (id: string) => {
     if (!activeGatheringId) return;
     const participant = activeGathering?.participants.find(p => p.id === id);
-    const success = await apiRemoveParticipant(activeGatheringId, id);
+    const success = apiRemoveParticipant(activeGatheringId, id);
     if (success && participant) {
       showToast('success', `${participant.name}님이 제거되었습니다.`);
     }
@@ -299,44 +278,38 @@ const App: React.FC = () => {
     setEditingParticipantId(null);
   };
 
-  const handleQuickImport = async () => {
+  const handleQuickImport = () => {
     if (!importText.trim() || !activeGatheringId) return;
     setIsImporting(true);
-    try {
-      // 간단한 텍스트 파싱: 줄바꿈이나 쉼표로 구분된 이름 추출
-      const lines = importText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+    // 간단한 텍스트 파싱: 줄바꿈이나 쉼표로 구분된 이름 추출
+    const lines = importText.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
 
-      for (const line of lines) {
-        // "이름 은행 계좌번호" 또는 "이름" 형식 파싱
-        const parts = line.split(/\s+/);
-        const name = parts[0];
-        const bankName = parts.length >= 3 ? parts[1] : undefined;
-        const accountNumber = parts.length >= 3 ? parts.slice(2).join('') : undefined;
+    for (const line of lines) {
+      // "이름 은행 계좌번호" 또는 "이름" 형식 파싱
+      const parts = line.split(/\s+/);
+      const name = parts[0];
+      const bankName = parts.length >= 3 ? parts[1] : undefined;
+      const accountNumber = parts.length >= 3 ? parts.slice(2).join('') : undefined;
 
-        if (name) {
-          const newParticipant = await apiAddParticipant(activeGatheringId, name);
-          if (newParticipant && (bankName || accountNumber)) {
-            setDirectory(prev => ({
-              ...prev,
-              [name]: { bankName, accountNumber }
-            }));
-          }
+      if (name) {
+        const newParticipant = apiAddParticipant(activeGatheringId, name);
+        if (newParticipant && (bankName || accountNumber)) {
+          setDirectory(prev => ({
+            ...prev,
+            [name]: { bankName, accountNumber }
+          }));
         }
       }
-
-      await refreshGathering(activeGatheringId);
-      setIsImportModalOpen(false);
-      setImportText('');
-      showToast('success', `${lines.length}명의 참여자가 추가되었습니다.`);
-    } catch (error) {
-      showToast('error', '참여자 추가에 실패했습니다.');
-    } finally {
-      setIsImporting(false);
     }
+
+    setIsImportModalOpen(false);
+    setImportText('');
+    showToast('success', `${lines.length}명의 참여자가 추가되었습니다.`);
+    setIsImporting(false);
   };
 
   // Round Handlers
-  const handleAddRound = async () => {
+  const handleAddRound = () => {
     if (!activeGatheringId || !activeGathering) return;
     const title = `${activeGathering.rounds.length + 1}차 정산`;
     const payerId = activeGathering.participants[0]?.id || '';
@@ -344,15 +317,15 @@ const App: React.FC = () => {
       showToast('warning', '먼저 참여자를 추가해주세요.');
       return;
     }
-    const result = await apiAddRound(activeGatheringId, title, 0, payerId, []);
+    const result = apiAddRound(activeGatheringId, title, 0, payerId, []);
     if (result) {
       showToast('success', '지출 내역이 추가되었습니다.');
     }
   };
 
-  const handleDeleteRound = async (roundId: string) => {
+  const handleDeleteRound = (roundId: string) => {
     if (!activeGatheringId) return;
-    const success = await apiDeleteRound(activeGatheringId, roundId);
+    const success = apiDeleteRound(activeGatheringId, roundId);
     if (success) {
       showToast('success', '지출 내역이 삭제되었습니다.');
     }
@@ -370,16 +343,14 @@ const App: React.FC = () => {
     updateLocalGathering(activeGatheringId, { rounds: updatedRounds });
   };
 
-  // API update for rounds - accepts optional updates to ensure latest values are sent
-  const saveRoundToServer = async (roundId: string, updates?: Partial<SettlementRound>) => {
+  const saveRoundToServer = (roundId: string, updates?: Partial<SettlementRound>) => {
     if (!activeGatheringId || !activeGathering) return;
     const round = activeGathering.rounds.find(r => r.id === roundId);
     if (!round) return;
 
-    // Merge updates to get the latest values
     const updatedRound = updates ? { ...round, ...updates } : round;
 
-    await apiUpdateRound(
+    apiUpdateRound(
       activeGatheringId,
       roundId,
       updatedRound.title,
@@ -412,48 +383,6 @@ const App: React.FC = () => {
     setShowCopyFeedback(true); setTimeout(() => setShowCopyFeedback(false), 2000);
   };
 
-  // Loading View
-  if (isAuthLoading) {
-    return (
-      <div className="min-h-screen bg-indigo-600 flex flex-col items-center justify-center p-6">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 size={48} className="text-white animate-spin" />
-          <p className="text-white font-medium">로그인 중...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Login View
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen bg-indigo-600 flex flex-col items-center justify-center p-6 animate-in fade-in duration-700">
-        <div className="max-w-md w-full bg-white rounded-[48px] p-10 shadow-2xl space-y-10 text-center">
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-20 h-20 bg-indigo-600 rounded-[28px] flex items-center justify-center text-white shadow-lg">
-              <Layers size={40} />
-            </div>
-            <h1 className="text-4xl font-black text-slate-900 tracking-tight">N-Bang</h1>
-            <p className="text-slate-500 font-medium leading-relaxed px-4">더 이상의 머리 아픈 정산은 그만.<br/>N빵으로 쉽게, 정확하게</p>
-          </div>
-          <div className="space-y-4">
-            <button onClick={() => login('kakao')} className="w-full bg-[#FEE500] text-[#191919] rounded-2xl py-4 font-black flex items-center justify-center gap-3 hover:opacity-90 transition-all shadow-md active:scale-95">
-              <div className="w-6 h-6 bg-[#191919] rounded-full flex items-center justify-center"><span className="text-[10px] text-[#FEE500] font-black">K</span></div>
-              카카오로 계속하기
-            </button>
-            <button onClick={() => login('google')} className="w-full bg-white text-slate-700 border border-slate-200 rounded-2xl py-4 font-black flex items-center justify-center gap-3 hover:bg-slate-50 transition-all shadow-md active:scale-95">
-              <svg className="w-5 h-5" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"></path><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.13-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"></path><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24s.92 7.54 2.56 10.78l7.97-6.19z"></path><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"></path></svg>
-              Google로 계속하기
-            </button>
-          </div>
-          <div className="pt-6 border-t border-slate-50">
-            <div className="flex items-center justify-center gap-2 text-slate-300 text-[10px] font-bold uppercase tracking-widest"><ShieldCheck size={14} /> 100% Secure & Private</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Home View
   if (!activeGatheringId) {
     return (
@@ -479,18 +408,12 @@ const App: React.FC = () => {
 
         <header className="flex flex-wrap items-center justify-between gap-6">
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 bg-white rounded-2xl shadow-sm border border-slate-200 flex items-center justify-center overflow-hidden">
-              {user?.profileImage ? (
-                <img src={user.profileImage} alt="profile" className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-black text-xl">
-                  {user?.nickname?.charAt(0) || '?'}
-                </div>
-              )}
+            <div className="w-14 h-14 bg-indigo-600 rounded-2xl shadow-sm flex items-center justify-center text-white">
+              <Layers size={28} />
             </div>
             <div>
-              <h2 className="text-xl font-black text-slate-900 tracking-tight">반가워요, {user?.nickname}님!</h2>
-              <button onClick={handleLogout} className="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors flex items-center gap-1 mt-0.5">로그아웃 <LogOut size={12} /></button>
+              <h2 className="text-xl font-black text-slate-900 tracking-tight">N-Bang</h2>
+              <p className="text-xs font-bold text-slate-400 mt-0.5">스마트 정산</p>
             </div>
           </div>
           <button onClick={() => setIsCreatingGathering(true)} className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl px-5 sm:px-8 py-3 sm:py-4 font-black flex items-center gap-2 transition-all shadow-lg shadow-indigo-200 active:scale-95 text-sm sm:text-base"><Plus size={20} /> 새 모임 시작하기</button>
@@ -705,11 +628,11 @@ const App: React.FC = () => {
                   {GATHERING_TYPES.map((gt) => (
                     <button
                       key={gt.type}
-                      onClick={async () => {
+                      onClick={() => {
                         if (gt.type !== activeGathering.type) {
                           const startStr = new Date(activeGathering.startDate).toISOString().split('T')[0];
                           const endStr = new Date(activeGathering.endDate).toISOString().split('T')[0];
-                          const result = await apiUpdateGathering(activeGathering.id, activeGathering.name, gt.type, startStr, endStr);
+                          const result = apiUpdateGathering(activeGathering.id, activeGathering.name, gt.type, startStr, endStr);
                           if (result) showToast('success', '모임 타입이 변경되었습니다.');
                         }
                         setIsEditingType(false);
@@ -734,18 +657,6 @@ const App: React.FC = () => {
           <NavItem active={activeTab === 'result'} onClick={() => setActiveTab('result')} icon={<ArrowRightLeft size={22} />} label="정산 결과" />
         </div>
         <div className="mt-auto pt-8 border-t border-slate-100 space-y-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-slate-100 overflow-hidden">
-              {user?.profileImage ? (
-                <img src={user.profileImage} alt="me" className="w-full h-full object-cover" />
-              ) : (
-                <div className="w-full h-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-black">
-                  {user?.nickname?.charAt(0) || '?'}
-                </div>
-              )}
-            </div>
-            <div className="overflow-hidden"><p className="text-sm font-black text-slate-900 truncate">{user?.nickname}</p></div>
-          </div>
           <div className={`${activeGathering.color || 'bg-indigo-600'} rounded-[28px] p-6 text-white shadow-2xl shadow-indigo-100`}>
             <p className="text-[10px] font-black text-white/70 uppercase tracking-[0.2em] mb-1">총 지출 금액</p>
             <p className="text-3xl font-black">{calculationResult.totalSpent.toLocaleString()}<span className="text-base ml-1 opacity-80">원</span></p>
@@ -987,43 +898,7 @@ const App: React.FC = () => {
                    <Copy size={24} />
                    카카오톡 메시지
                  </button>
-                 <button
-                   onClick={async () => {
-                     if (!activeGatheringId) return;
-                     setIsCreatingShareLink(true);
-                     try {
-                       const result = await shareApi.createShareLink(Number(activeGatheringId));
-                       const link = `${window.location.origin}/shared/${result.uuid}`;
-                       setShareLink({ url: link, expiresAt: result.expiresAt });
-                     } catch {
-                       showToast('error', '공유 링크 생성에 실패했습니다.');
-                     } finally {
-                       setIsCreatingShareLink(false);
-                     }
-                   }}
-                   disabled={isCreatingShareLink}
-                   className="flex-1 bg-emerald-600 text-white rounded-2xl sm:rounded-[40px] py-6 sm:py-10 font-black text-lg sm:text-3xl flex items-center justify-center gap-3 sm:gap-5 hover:brightness-110 shadow-2xl transition-all active:scale-[0.98] disabled:opacity-50"
-                 >
-                   <Link2 size={24} />
-                   {isCreatingShareLink ? '생성 중...' : '공유 링크'}
-                 </button>
                </div>
-
-               {shareLink && (
-                 <div className="bg-white rounded-3xl p-6 sm:p-10 border border-slate-200 shadow-sm animate-in slide-in-from-bottom-10 duration-700">
-                   <h3 className="text-xl font-black mb-2">공유 링크가 생성되었습니다</h3>
-                   <p className="text-sm text-slate-500 mb-4">
-                     {new Date(shareLink.expiresAt).toLocaleString('ko-KR', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}까지 유효하며, 로그인 없이 접근할 수 있습니다.
-                   </p>
-                   <div className="flex items-center gap-3 bg-slate-50 rounded-2xl px-5 py-4 border border-slate-200">
-                     <input type="text" value={shareLink.url} readOnly className="flex-1 bg-transparent font-mono text-sm truncate outline-none" />
-                     <button onClick={() => { navigator.clipboard.writeText(shareLink.url); showToast('success', '링크가 복사되었습니다.'); }} className="bg-indigo-600 text-white px-6 py-2 rounded-xl font-black text-sm active:scale-95 flex-shrink-0">
-                       복사
-                     </button>
-                   </div>
-                   <button onClick={() => setShareLink(null)} className="mt-3 text-sm font-bold text-slate-400 hover:text-slate-600">닫기</button>
-                 </div>
-               )}
 
                {kakaoMessage && (
                  <div className={`${activeGathering.color || 'bg-indigo-600'} p-6 sm:p-14 rounded-3xl sm:rounded-[72px] text-white shadow-2xl shadow-indigo-100 animate-in slide-in-from-bottom-10 duration-700`}>
